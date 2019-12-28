@@ -8,11 +8,11 @@
  *
  *		Generic CD-ROM drive core.
  *
- * Version:	@(#)cdrom.c	1.0.7	2018/10/30
+ * Version:	@(#)cdrom.c	1.0.9	2019/12/13
  *
  * Author:	Miran Grca, <mgrca8@gmail.com>
  *
- *		Copyright 2018 Miran Grca.
+ *		Copyright 2018,2019 Miran Grca.
  */
 #include <inttypes.h>
 #include <stdarg.h>
@@ -332,7 +332,7 @@ cdrom_audio_play(cdrom_t *dev, uint32_t pos, uint32_t len, int ismsf)
     /* Do this at this point, since it's at this point that we know the
        actual LBA position to start playing from. */
     if (!(dev->ops->track_type(dev, pos) & CD_TRACK_AUDIO)) {
-	pclog("CD-ROM %i: LBA %08X not on an audio track\n", dev->id, pos);
+	cdrom_log("CD-ROM %i: LBA %08X not on an audio track\n", dev->id, pos);
 	cdrom_stop(dev);
 	return 0;
     }
@@ -359,7 +359,7 @@ cdrom_get_current_subchannel(cdrom_t *dev, uint8_t *b, int msf)
 {
     uint8_t ret;
     subchannel_t subc;
-    int pos = 0;
+    int pos = 1;
 
     dev->ops->get_subchannel(dev, dev->seek_pos, &subc);
     cdrom_log("CD-ROM %i: Returned subchannel at %02i:%02i.%02i\n", subc.abs_m, subc.abs_s, subc.abs_f);
@@ -374,6 +374,9 @@ cdrom_get_current_subchannel(cdrom_t *dev, uint8_t *b, int msf)
 	else
 		ret = 0x13;
     }
+
+    if (b[pos] > 1)
+	return ret;
 
     b[pos++] = subc.attr;
     b[pos++] = subc.track;

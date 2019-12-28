@@ -9,17 +9,17 @@
  *		Implementation of the CD-ROM drive with SCSI(-like)
  *		commands, for both ATAPI and SCSI usage.
  *
- * Version:	@(#)scsi_cdrom.h	1.0.1	2018/10/17
+ * Version:	@(#)scsi_cdrom.h	1.0.2	2019/11/19
  *
  * Author:	Miran Grca, <mgrca8@gmail.com>
  *
- *		Copyright 2018 Miran Grca.
+ *		Copyright 2018,2019 Miran Grca.
  */
 #ifndef EMU_SCSI_CDROM_H
 #define EMU_SCSI_CDROM_H
 
 
-#define CDROM_TIME (5LL * 100LL * (1LL << TIMER_SHIFT))
+#define CDROM_TIME	10.0
 
 
 #ifdef SCSI_DEVICE_H
@@ -49,7 +49,7 @@ typedef struct {
     uint32_t sector_pos, sector_len,
 	     packet_len, pos;
 
-    int64_t callback;
+    double callback;
 } scsi_cdrom_t;
 #endif
 

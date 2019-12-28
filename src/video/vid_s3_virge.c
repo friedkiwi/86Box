@@ -25,6 +25,7 @@
 #define HAVE_STDARG_H
 #include "../86box.h"
 #include "../io.h"
+#include "../timer.h"
 #include "../mem.h"
 #include "../pci.h"
 #include "../rom.h"
@@ -688,7 +689,7 @@ static void s3_virge_recalctimings(svga_t *svga)
                 int m = svga->seqregs[0x13] & 0x7f;
                 double freq = (((double)m + 2) / (((double)n + 2) * (double)(1 << r))) * 14318184.0;
 
-                svga->clock = cpuclock / freq;
+                svga->clock = (cpuclock * (float)(1ull << 32)) / freq;
         }
 }
 
@@ -3406,12 +3407,8 @@ static void s3_virge_hwcursor_draw(svga_t *svga, int displine)
         uint16_t dat[2];
         int xx;
         int offset = svga->hwcursor_latch.x - svga->hwcursor_latch.xoff;
-	int y_add, x_add;
         uint32_t fg, bg;
 
-	y_add = (enable_overscan && !suppress_overscan) ? (overscan_y >> 1) : 0;
-	x_add = (enable_overscan && !suppress_overscan) ? 8 : 0;
-        
         if (svga->interlace && svga->hwcursor_oddeven)
                 svga->hwcursor_latch.addr += 16;
 
@@ -3450,7 +3447,7 @@ static void s3_virge_hwcursor_draw(svga_t *svga, int displine)
                                 if (offset >= svga->hwcursor_latch.x)
                                 {
                                         if (dat[0] & 0x8000)
-                                                ((uint32_t *)buffer32->line[displine + y_add])[offset + 32 + x_add]  = (dat[1] & 0x8000) ? fg : bg;
+						buffer32->line[displine][offset + svga->x_add]  = (dat[1] & 0x8000) ? fg : bg;
                                 }
                            
                                 offset++;
@@ -3466,9 +3463,9 @@ static void s3_virge_hwcursor_draw(svga_t *svga, int displine)
                                 if (offset >= svga->hwcursor_latch.x)
                                 {
                                         if (!(dat[0] & 0x8000))
-                                           ((uint32_t *)buffer32->line[displine + y_add])[offset + 32 + x_add]  = (dat[1] & 0x8000) ? fg : bg;
+						buffer32->line[displine][offset + svga->x_add]  = (dat[1] & 0x8000) ? fg : bg;
                                         else if (dat[1] & 0x8000)
-                                           ((uint32_t *)buffer32->line[displine + y_add])[offset + 32 + x_add] ^= 0xffffff;
+						buffer32->line[displine][offset + svga->x_add] ^= 0xffffff;
                                 }
                            
                                 offset++;
@@ -3719,11 +3716,9 @@ static void s3_virge_overlay_draw(svga_t *svga, int displine)
         int x;
         uint32_t *p;
         uint8_t *src = &svga->vram[svga->overlay_latch.addr];
-	int y_add = enable_overscan ? 16 : 0;
-	int x_add = enable_overscan ? 8 : 0;
         
-        p = &((uint32_t *)buffer32->line[displine + y_add])[offset + 32 + x_add];
-        
+        p = &(buffer32->line[displine][offset + svga->x_add]);
+
         if ((offset + virge->streams.sec_w) > virge->streams.pri_w)
                 x_size = (virge->streams.pri_w - virge->streams.sec_x) + 1;
         else
@@ -3902,7 +3897,7 @@ static void *s3_virge_init(const device_t *info)
                                                         s3_virge_mmio_write_w,
                                                         s3_virge_mmio_write_l,
                                                         NULL,
-                                                        0,
+                                                        MEM_MAPPING_EXTERNAL,
                                                         virge);
         mem_mapping_add(&virge->new_mmio_mapping, 0, 0, s3_virge_mmio_read,
                                                         s3_virge_mmio_read_w,
@@ -3911,7 +3906,7 @@ static void *s3_virge_init(const device_t *info)
                                                         s3_virge_mmio_write_w,
                                                         s3_virge_mmio_write_l,
                                                         NULL,
-                                                        0,
+                                                        MEM_MAPPING_EXTERNAL,
                                                         virge);
         mem_mapping_add(&virge->linear_mapping,   0, 0, svga_read_linear,
                                                         svga_readw_linear,
@@ -3920,7 +3915,7 @@ static void *s3_virge_init(const device_t *info)
                                                         svga_writew_linear,
                                                         svga_writel_linear,
                                                         NULL,
-                                                        0,
+                                                        MEM_MAPPING_EXTERNAL,
                                                         &virge->svga);
 
         io_sethandler(0x03c0, 0x0020, s3_virge_in, NULL, NULL, s3_virge_out, NULL, NULL, virge);

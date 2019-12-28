@@ -21,6 +21,7 @@
 #include <wchar.h>
 #include "86box.h"
 #include "io.h"
+#include "timer.h"
 #include "device.h"
 #include "pci.h"
 #include "lpt.h"
@@ -129,6 +130,10 @@ fdc37c93x_lpt_handler(fdc37c93x_t *dev)
     uint16_t ld_port = 0;
     uint8_t global_enable = !!(dev->regs[0x22] & (1 << 3));
     uint8_t local_enable = !!dev->ld_regs[3][0x30];
+    uint8_t lpt_irq = dev->ld_regs[3][0x70];
+
+    if (lpt_irq > 15)
+	lpt_irq = 0xff;
 
     lpt1_remove();
     if (global_enable && local_enable) {
@@ -136,6 +141,7 @@ fdc37c93x_lpt_handler(fdc37c93x_t *dev)
 	if ((ld_port >= 0x0100) && (ld_port <= 0x0FFC))
 		lpt1_init(ld_port);
     }
+    lpt1_irq(lpt_irq);
 }
 
 
@@ -407,6 +413,7 @@ fdc37c93x_write(uint16_t port, uint8_t val, void *priv)
 			case 0x30:
 			case 0x60:
 			case 0x61:
+			case 0x70:
 				if (valxor)
 					fdc37c93x_lpt_handler(dev);
 				break;
@@ -470,23 +477,22 @@ static uint8_t fdc37c93x_read(uint16_t port, void *priv)
     uint8_t index = (port & 1) ? 0 : 1;
     uint8_t ret = 0xff;
 
-    if (!dev->locked)
-	return ret;
-
-    if (index)
-	ret = dev->cur_reg;
-    else {
-	if (dev->cur_reg < 0x30) {
-		if (dev->cur_reg == 0x20)
-			ret = dev->chip_id;
-		else
-			ret = dev->regs[dev->cur_reg];
-	} else {
-		if ((dev->regs[7] == 0) && (dev->cur_reg == 0xF2)) {
-			ret = (fdc_get_rwc(dev->fdc, 0) | (fdc_get_rwc(dev->fdc, 1) << 2) |
-			      (fdc_get_rwc(dev->fdc, 2) << 4) | (fdc_get_rwc(dev->fdc, 3) << 6));
-		} else
-			ret = dev->ld_regs[dev->regs[7]][dev->cur_reg];
+    if (dev->locked) {
+	if (index)
+		ret = dev->cur_reg;
+	else {
+		if (dev->cur_reg < 0x30) {
+			if (dev->cur_reg == 0x20)
+				ret = dev->chip_id;
+			else
+				ret = dev->regs[dev->cur_reg];
+		} else {
+			if ((dev->regs[7] == 0) && (dev->cur_reg == 0xF2)) {
+				ret = (fdc_get_rwc(dev->fdc, 0) | (fdc_get_rwc(dev->fdc, 1) << 2) |
+				      (fdc_get_rwc(dev->fdc, 2) << 4) | (fdc_get_rwc(dev->fdc, 3) << 6));
+			} else
+				ret = dev->ld_regs[dev->regs[7]][dev->cur_reg];
+		}
 	}
     }
 
@@ -498,8 +504,6 @@ static void
 fdc37c93x_reset(fdc37c93x_t *dev)
 {
     int i = 0;
-
-    lpt2_remove();
 
     memset(dev->regs, 0, 48);
 
@@ -576,8 +580,6 @@ fdc37c93x_reset(fdc37c93x_t *dev)
     dev->ld_regs[7][0x70] = 1;
 
     /* Logical device 8: Auxiliary I/O */
-    io_removehandler(dev->access_bus->base, 0x0004,
-		     fdc37c932fr_access_bus_read, NULL, NULL, fdc37c932fr_access_bus_write, NULL, NULL, dev->access_bus);
 
     /* Logical device 9: ACCESS.bus */
 
@@ -590,6 +592,7 @@ fdc37c93x_reset(fdc37c93x_t *dev)
 	fdc37c932fr_access_bus_handler(dev);
 
     fdc_reset(dev->fdc);
+    fdc37c93x_fdc_handler(dev);
 
     dev->locked = 0;
 }
@@ -665,6 +668,15 @@ const device_t fdc37c932fr_device = {
     "SMC FDC37C932FR Super I/O",
     0,
     0x03,
+    fdc37c93x_init, fdc37c93x_close, NULL,
+    NULL, NULL, NULL,
+    NULL
+};
+
+const device_t fdc37c932qf_device = {
+    "SMC FDC37C932QF Super I/O",
+    0,
+    0x02,	/* Share the same ID with the 935. */
     fdc37c93x_init, fdc37c93x_close, NULL,
     NULL, NULL, NULL,
     NULL

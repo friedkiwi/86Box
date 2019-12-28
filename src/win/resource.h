@@ -8,16 +8,16 @@
  *
  *		Windows resource defines.
  *
- * Version:	@(#)resource.h	1.0.30	2019/01/19
+ * Version:	@(#)resource.h	1.0.32	2019/12/21
  *
  * Authors:	Sarah Walker, <http://pcem-emulator.co.uk/>
  *		Miran Grca, <mgrca8@gmail.com>
  *		Fred N. van Kempen, <decwiz@yahoo.com>
  *		David Hrdlička, <hrdlickadavid@outlook.com>
  *
- *		Copyright 2008-2018 Sarah Walker.
- *		Copyright 2016-2018 Miran Grca.
- *		Copyright 2018 David Hrdlička.
+ *		Copyright 2008-2019 Sarah Walker.
+ *		Copyright 2016-2019 Miran Grca.
+ *		Copyright 2018,2019 David Hrdlička.
  */
 #ifndef WIN_RESOURCE_H
 # define WIN_RESOURCE_H
@@ -144,12 +144,11 @@
 #define IDC_CHECK_SSI		1072
 #define IDC_CHECK_CMS		1073
 #define IDC_CHECK_GUS		1074
-#define IDC_CHECK_NUKEDOPL	1075
-#define IDC_COMBO_MIDI		1076
-#define IDC_CHECK_MPU401	1077
-#define IDC_CONFIGURE_MPU401	1078
-#define IDC_CHECK_FLOAT		1079
-#define IDC_CHECK_GUSMAX	1080
+#define IDC_COMBO_MIDI		1075
+#define IDC_CHECK_MPU401	1076
+#define IDC_CONFIGURE_MPU401	1077
+#define IDC_CHECK_FLOAT		1078
+#define IDC_CHECK_GUSMAX	1079
 
 #define IDC_COMBO_NET_TYPE	1090	/* network config */
 #define IDC_COMBO_PCAP		1091
@@ -160,7 +159,9 @@
 #define IDC_COMBO_LPT3		1112
 #define IDC_CHECK_SERIAL1	1113
 #define IDC_CHECK_SERIAL2	1114
-#define IDC_CHECK_PARALLEL	1115
+#define IDC_CHECK_PARALLEL1	1115
+#define IDC_CHECK_PARALLEL2	1116
+#define IDC_CHECK_PARALLEL3	1117
 
 #define IDC_OTHER_PERIPH	1120	/* other periph config */
 #define IDC_COMBO_SCSI		1121
@@ -264,17 +265,16 @@
 #define IDM_UPDATE_ICONS	40030
 #define IDM_VID_RESIZE		40040
 #define IDM_VID_REMEMBER	40041
-#define IDM_VID_DDRAW		40050
+#define IDM_VID_SDL_SW		40050
+#define IDM_VID_SDL_HW		40051
 #ifdef USE_D2D
-#define IDM_VID_D2D		40051
-#define IDM_VID_D3D		40052
-#define IDM_VID_SDL		40053
-#define IDM_VID_VNC		40054
-#else
-#define IDM_VID_D3D		40051
-#define IDM_VID_SDL		40052
+#define IDM_VID_D2D		40052
 #ifdef USE_VNC
 #define IDM_VID_VNC		40053
+#endif
+#else
+#ifdef USE_VNC
+#define IDM_VID_VNC		40052
 #endif
 #endif
 #define IDM_VID_SCALE_1X	40055
@@ -284,9 +284,8 @@
 #define IDM_VID_FULLSCREEN	40060
 #define IDM_VID_FS_FULL		40061
 #define IDM_VID_FS_43		40062
-#define IDM_VID_FS_SQ		40063
+#define IDM_VID_FS_KEEPRATIO	40063
 #define IDM_VID_FS_INT		40064
-#define IDM_VID_FS_KEEPRATIO	40065
 #define IDM_VID_FORCE43		40066
 #define IDM_VID_OVERSCAN	40067
 #define IDM_VID_INVERT		40069
@@ -299,6 +298,10 @@
 #define IDM_VID_GRAY_AMBER	40082
 #define IDM_VID_GRAY_GREEN	40083
 #define IDM_VID_GRAY_WHITE	40084
+
+#ifdef USE_DISCORD
+#define IDM_DISCORD		40090
+#endif
 
 #define IDM_LOG_BREAKPOINT	51201
 #define IDM_DUMP_VRAM		51202	// should be an Action

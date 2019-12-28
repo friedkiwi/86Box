@@ -8,15 +8,15 @@
  *
  *		user Interface module for WinAPI on Windows.
  *
- * Version:	@(#)win_ui.c	1.0.40	2019/7/28
+ * Version:	@(#)win_ui.c	1.0.45	2019/12/05
  *
  * Authors:	Sarah Walker, <http://pcem-emulator.co.uk/>
  *		Miran Grca, <mgrca8@gmail.com>
  *		Fred N. van Kempen, <decwiz@yahoo.com>
  *
- *		Copyright 2008-2018 Sarah Walker.
- *		Copyright 2016-2018 Miran Grca.
- *		Copyright 2017,2018 Fred N. van Kempen.
+ *		Copyright 2008-2019 Sarah Walker.
+ *		Copyright 2016-2019 Miran Grca.
+ *		Copyright 2017-2019 Fred N. van Kempen.
  *		Copyright 2019 GH Cao.
  */
 #define UNICODE
@@ -39,7 +39,9 @@
 #include "../plat_midi.h"
 #include "../ui.h"
 #include "win.h"
-#include "win_d3d.h"
+#ifdef USE_DISCORD
+# include "win_discord.h"
+#endif
 
 
 #define TIMER_1SEC	1		/* ID of the one-second timer */
@@ -51,7 +53,8 @@ HWND		hwndMain,		/* application main window */
 HMENU		menuMain;		/* application main menu */
 HICON		hIcon[256];		/* icon data loaded from resources */
 RECT		oldclip;		/* mouse rect */
-int 		sbar_height = 23;     /* statusbar height */
+int		sbar_height = 23;     /* statusbar height */
+int		minimized = 0;
 int		infocus = 1;
 int		rctrl_is_lalt = 0;
 int		user_resize = 0;
@@ -63,8 +66,8 @@ WCHAR		wopenfilestring[260];
 /* Local data. */
 static wchar_t	wTitle[512];
 static HHOOK	hKeyboardHook;
-static int	hook_enabled = 0;
-static int	save_window_pos = 0;
+static int	hook_enabled = 0, manager_wm = 0;
+static int	save_window_pos = 0, pause_state = 0;
 
 
 static int vis = -1;
@@ -155,20 +158,13 @@ ResetAllMenus(void)
     CheckMenuItem(menuMain, IDM_VID_INVERT, MF_UNCHECKED);
 
     CheckMenuItem(menuMain, IDM_VID_RESIZE, MF_UNCHECKED);
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+0, MF_UNCHECKED);
+    CheckMenuItem(menuMain, IDM_VID_SDL_SW, MF_UNCHECKED);
+    CheckMenuItem(menuMain, IDM_VID_SDL_HW, MF_UNCHECKED);
 #ifdef USE_D2D
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+1, MF_UNCHECKED);
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+2, MF_UNCHECKED);
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+3, MF_UNCHECKED);
-#ifdef USE_VNC
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+4, MF_UNCHECKED);
+    CheckMenuItem(menuMain, IDM_VID_D2D, MF_UNCHECKED);
 #endif
-#else
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+1, MF_UNCHECKED);
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+2, MF_UNCHECKED);
 #ifdef USE_VNC
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+3, MF_UNCHECKED);
-#endif
+    CheckMenuItem(menuMain, IDM_VID_VNC, MF_UNCHECKED);
 #endif
     CheckMenuItem(menuMain, IDM_VID_FS_FULL+0, MF_UNCHECKED);
     CheckMenuItem(menuMain, IDM_VID_FS_FULL+1, MF_UNCHECKED);
@@ -225,7 +221,7 @@ ResetAllMenus(void)
 
     if (vid_resize)
 	CheckMenuItem(menuMain, IDM_VID_RESIZE, MF_CHECKED);
-    CheckMenuItem(menuMain, IDM_VID_DDRAW+vid_api, MF_CHECKED);
+    CheckMenuItem(menuMain, IDM_VID_SDL_SW+vid_api, MF_CHECKED);
     CheckMenuItem(menuMain, IDM_VID_FS_FULL+video_fullscreen_scale, MF_CHECKED);
     CheckMenuItem(menuMain, IDM_VID_REMEMBER, window_remember?MF_CHECKED:MF_UNCHECKED);
     CheckMenuItem(menuMain, IDM_VID_SCALE_1X+scale, MF_CHECKED);
@@ -233,6 +229,13 @@ ResetAllMenus(void)
     CheckMenuItem(menuMain, IDM_VID_CGACON, vid_cga_contrast?MF_CHECKED:MF_UNCHECKED);
     CheckMenuItem(menuMain, IDM_VID_GRAYCT_601+video_graytype, MF_CHECKED);
     CheckMenuItem(menuMain, IDM_VID_GRAY_RGB+video_grayscale, MF_CHECKED);
+
+#ifdef USE_DISCORD
+    if (discord_loaded)
+	CheckMenuItem(menuMain, IDM_DISCORD, enable_discord ? MF_CHECKED : MF_UNCHECKED);
+    else
+	EnableMenuItem(menuMain, IDM_DISCORD, MF_DISABLED);
+#endif
 }
 
 
@@ -269,12 +272,33 @@ LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 }
 
 
+void
+win_notify_dlg_open(void)
+{
+    manager_wm = 1;
+    pause_state = dopause;
+    plat_pause(1);
+    if (source_hwnd)
+	PostMessage((HWND) (uintptr_t) source_hwnd, WM_SENDDLGSTATUS, (WPARAM) 1, (LPARAM) hwndMain);
+}
+
+
+void
+win_notify_dlg_closed(void)
+{
+    if (source_hwnd)
+	PostMessage((HWND) (uintptr_t) source_hwnd, WM_SENDDLGSTATUS, (WPARAM) 0, (LPARAM) hwndMain);
+    plat_pause(pause_state);
+    manager_wm = 0;
+}
+
+
 static LRESULT CALLBACK
 MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     HMENU hmenu;
 
-    int sb_borders[3];
+    int i, sb_borders[3];
     RECT rect;
 
     int temp_x, temp_y;
@@ -296,7 +320,11 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 				break;
 
 			case IDM_ACTION_HRESET:
-				pc_reset(1);
+				win_notify_dlg_open();
+				i = ui_msgbox(MBX_QUESTION_YN, (wchar_t *)IDS_2121);
+				if (i == 0)
+					pc_reset(1);
+				win_notify_dlg_closed();
 				break;
 
 			case IDM_ACTION_RESET_CAD:
@@ -304,7 +332,14 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 				break;
 
 			case IDM_ACTION_EXIT:
-				PostQuitMessage(0);
+				win_notify_dlg_open();
+				i = ui_msgbox(MBX_QUESTION_YN, (wchar_t *)IDS_2122);
+				if (i == 0) {
+					UnhookWindowsHookEx(hKeyboardHook);
+					KillTimer(hwnd, TIMER_1SEC);
+					PostQuitMessage(0);
+				}
+				win_notify_dlg_closed();
 				break;
 
 			case IDM_ACTION_CTRL_ALT_ESC:
@@ -348,6 +383,7 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 				SendMessage(hwndSBAR, SB_GETBORDERS, 0, (LPARAM) sb_borders);
 
 				GetWindowRect(hwnd, &rect);
+
 				/* Main Window. */
 				if (GetSystemMetrics(SM_CXPADDEDBORDER) == 0) {
 					/* For platforms that subsystem version < 6.0 (default on mingw/msys2) */
@@ -406,18 +442,17 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 				config_save();
 				break;
 
-			case IDM_VID_DDRAW:
+			case IDM_VID_SDL_SW:
+			case IDM_VID_SDL_HW:
 #ifdef USE_D2D
 			case IDM_VID_D2D:
 #endif
-			case IDM_VID_D3D:
-			case IDM_VID_SDL:
 #ifdef USE_VNC
 			case IDM_VID_VNC:
 #endif
-				CheckMenuItem(hmenu, IDM_VID_DDRAW+vid_api, MF_UNCHECKED);
-				plat_setvid(LOWORD(wParam) - IDM_VID_DDRAW);
-				CheckMenuItem(hmenu, IDM_VID_DDRAW+vid_api, MF_CHECKED);
+				CheckMenuItem(hmenu, IDM_VID_SDL_SW + vid_api, MF_UNCHECKED);
+				plat_setvid(LOWORD(wParam) - IDM_VID_SDL_SW);
+				CheckMenuItem(hmenu, IDM_VID_SDL_SW + vid_api, MF_CHECKED);
 				config_save();
 				break;
 
@@ -428,9 +463,8 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 			case IDM_VID_FS_FULL:
 			case IDM_VID_FS_43:
-			case IDM_VID_FS_SQ:                                
+			case IDM_VID_FS_KEEPRATIO:                              
 			case IDM_VID_FS_INT:
-			case IDM_VID_FS_KEEPRATIO:
 				CheckMenuItem(hmenu, IDM_VID_FS_FULL+video_fullscreen_scale, MF_UNCHECKED);
 				video_fullscreen_scale = LOWORD(wParam) - IDM_VID_FS_FULL;
 				CheckMenuItem(hmenu, IDM_VID_FS_FULL+video_fullscreen_scale, MF_CHECKED);
@@ -493,6 +527,19 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 				device_force_redraw();
 				config_save();
 				break;
+
+#ifdef USE_DISCORD
+			case IDM_DISCORD:
+				if (! discord_loaded) break;
+				enable_discord ^= 1;
+				CheckMenuItem(hmenu, IDM_DISCORD, enable_discord ? MF_CHECKED : MF_UNCHECKED);
+				if(enable_discord) {
+					discord_init();
+					discord_update_activity(dopause);
+				} else
+					discord_close();
+				break;
+#endif
 
 #ifdef ENABLE_LOG_TOGGLES
 # ifdef ENABLE_BUSLOGIC_LOG
@@ -569,7 +616,18 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 		SendMessage(hwndSBAR, SB_GETBORDERS, 0, (LPARAM) sb_borders);
 
 		temp_x = (lParam & 0xFFFF);
-		temp_y = (lParam >> 16) - sbar_height;
+		temp_y = (lParam >> 16);
+
+		if ((temp_x <= 0) || (temp_y <= 0)) {
+			minimized = 1;
+			break;
+		} else if (minimized == 1) {
+			minimized = 0;
+			video_force_resize_set(1);
+		}
+
+		plat_vidapi_enable(0);
+		temp_y -= sbar_height;
 		if (temp_x < 1)
 			temp_x = 1;
 		if (temp_y < 1)
@@ -606,6 +664,7 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 			window_h = rect.bottom - rect.top;
 			save_window_pos = 1;
 		}
+		plat_vidapi_enable(1);
 
 		config_save();
 		break;
@@ -622,20 +681,12 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
                 
 	case WM_TIMER:
-		if (wParam == TIMER_1SEC) {
+		if (wParam == TIMER_1SEC)
 			pc_onesec();
-		}
+		else if ((wParam >= 0x8000) && (wParam <= 0x80ff))
+			ui_sb_timer_callback(wParam & 0xff);
 		break;
 		
-	case WM_RESETD3D:
-		startblit();
-		if (video_fullscreen)
-			d3d_reset_fs();
-		  else
-			d3d_reset();
-		endblit();
-		break;
-
 	case WM_LEAVEFULLSCREEN:
 		plat_setfullscreen(0);
 		config_save();
@@ -647,6 +698,17 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_SYSKEYUP:
 		return(0);
 
+	case WM_CLOSE:
+		win_notify_dlg_open();
+		i = ui_msgbox(MBX_QUESTION_YN, (wchar_t *)IDS_2122);
+		if (i == 0) {
+			UnhookWindowsHookEx(hKeyboardHook);
+			KillTimer(hwnd, TIMER_1SEC);
+			PostQuitMessage(0);
+		}
+		win_notify_dlg_closed();
+		break;
+
 	case WM_DESTROY:
 		UnhookWindowsHookEx(hKeyboardHook);
 		KillTimer(hwnd, TIMER_1SEC);
@@ -654,24 +716,51 @@ MainWindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 
 	case WM_SHOWSETTINGS:
+		if (manager_wm)
+			break;
+		manager_wm = 1;
 		win_settings_open(hwnd);
+		manager_wm = 0;
 		break;
 
 	case WM_PAUSE:
+		if (manager_wm)
+			break;
+		manager_wm = 1;
 		plat_pause(dopause ^ 1);
 		CheckMenuItem(menuMain, IDM_ACTION_PAUSE, dopause ? MF_CHECKED : MF_UNCHECKED);
+		manager_wm = 0;
 		break;
 
 	case WM_HARDRESET:
-		pc_reset(1);
+		if (manager_wm)
+			break;
+		win_notify_dlg_open();
+		i = ui_msgbox(MBX_QUESTION_YN, (wchar_t *)IDS_2121);
+		if (i == 0)
+			pc_reset(1);
+		win_notify_dlg_closed();
 		break;
 
 	case WM_SHUTDOWN:
-		PostQuitMessage(0);
+		if (manager_wm)
+			break;
+		win_notify_dlg_open();
+		i = ui_msgbox(MBX_QUESTION_YN, (wchar_t *)IDS_2122);
+		if (i == 0) {
+			UnhookWindowsHookEx(hKeyboardHook);
+			KillTimer(hwnd, TIMER_1SEC);
+			PostQuitMessage(0);
+		}
+		win_notify_dlg_closed();
 		break;
 
 	case WM_CTRLALTDEL:
+		if (manager_wm)
+			break;
+		manager_wm = 1;
 		pc_reset(0);
+		manager_wm = 0;
 		break;
 
 	case WM_SYSCOMMAND:
@@ -757,6 +846,18 @@ ui_init(int nCmdShow)
 	win_settings_open(NULL);
 	return(0);
     }
+
+#ifdef USE_DISCORD
+    if(! discord_load()) {
+	enable_discord = 0;
+    } else if (enable_discord) {
+	/* Initialize the Discord API */
+	discord_init();
+
+	/* Update Discord status */
+	discord_update_activity(dopause);
+    }
+#endif
 
     /* Create our main window's class and register it. */
     wincl.hInstance = hinstance;
@@ -852,11 +953,11 @@ ui_init(int nCmdShow)
     /* Create the status bar window. */
     StatusBarCreate(hwndMain, IDC_STATUS, hinstance);
 
-    /* Get the actual height of the statusbar, 
-     * since that is not something we can change.
-     */
-    GetWindowRect(hwndSBAR, &sbar_rect);
-    sbar_height = sbar_rect.bottom - sbar_rect.top;
+	/* Get the actual height of the statusbar, 
+	 * since that is not something we can change.
+	 */
+	GetWindowRect(hwndSBAR, &sbar_rect);
+	sbar_height = sbar_rect.bottom - sbar_rect.top;
 
     /*
      * Before we can create the Render window, we first have
@@ -944,6 +1045,12 @@ ui_init(int nCmdShow)
 		/* Signal "exit fullscreen mode". */
 		plat_setfullscreen(0);
 	}
+
+#ifdef USE_DISCORD
+	/* Run Discord API callbacks */
+	if (enable_discord)
+		discord_run_callbacks();
+#endif
     }
 
     timeEndPeriod(1);
@@ -958,6 +1065,11 @@ ui_init(int nCmdShow)
     UnregisterClass(CLASS_NAME, hinstance);
 
     win_mouse_close();
+
+#ifdef USE_DISCORD
+    /* Shut down the Discord integration */
+    discord_close();
+#endif
 
     return(messages.wParam);
 }
@@ -994,7 +1106,13 @@ plat_pause(int p)
 	p = get_vidpause();
 
     /* If already so, done. */
-    if (dopause == p) return;
+    if (dopause == p) {
+	/* Send the WM to a manager if needed. */
+	if (source_hwnd)
+		PostMessage((HWND) (uintptr_t) source_hwnd, WM_SENDSTATUS, (WPARAM) !!dopause, (LPARAM) hwndMain);
+
+	return;
+    }
 
     if (p) {
 	wcscpy(oldtitle, ui_window_title(NULL));
@@ -1010,6 +1128,12 @@ plat_pause(int p)
     /* Update the actual menu. */
     CheckMenuItem(menuMain, IDM_ACTION_PAUSE,
 		  (dopause) ? MF_CHECKED : MF_UNCHECKED);
+
+#if USE_DISCORD
+    /* Update Discord status */
+    if(enable_discord)
+	discord_update_activity(dopause);
+#endif
 
     /* Send the WM to a manager if needed. */
     if (source_hwnd)
@@ -1031,7 +1155,7 @@ plat_resize(int x, int y)
 	SendMessage(hwndSBAR, SB_GETBORDERS, 0, (LPARAM) sb_borders);
 
 	GetWindowRect(hwndMain, &r);
-	
+
 	if (GetSystemMetrics(SM_CXPADDEDBORDER) == 0) {
 		/* For platforms that subsystem version < 6.0 (gcc on mingw/msys2) */
 		/* In this case, border sizes are different between resizable and non-resizable window */

@@ -9,11 +9,11 @@
  *		Implementation of the Iomega ZIP drive with SCSI(-like)
  *		commands, for both ATAPI and SCSI usage.
  *
- * Version:	@(#)zip.c	1.0.37	2018/11/02
+ * Version:	@(#)zip.c	1.0.38	2019/11/19
  *
  * Author:	Miran Grca, <mgrca8@gmail.com>
  *
- *		Copyright 2018 Miran Grca.
+ *		Copyright 2018,2019 Miran Grca.
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -23,6 +23,7 @@
 #include <wchar.h>
 #define HAVE_STDARG_H
 #include "../86box.h"
+#include "../timer.h"
 #include "../config.h"
 #include "../timer.h"
 #include "../device.h"
@@ -853,32 +854,45 @@ zip_update_request_length(zip_t *dev, int len, int block_len)
 }
 
 
+static double
+zip_bus_speed(zip_t *dev)
+{
+    double ret = -1.0;
+
+    if (dev->drv->bus_type == ZIP_BUS_SCSI) {
+	dev->callback = -1.0;	/* Speed depends on SCSI controller */
+	return 0.0;
+    } else {
+	if (dev && dev->drv)
+		ret = ide_atapi_get_period(dev->drv->ide_channel);
+	if (ret == -1.0) {
+		dev->callback = -1.0;
+		return 0.0;
+	} else
+		return ret * 1000000.0;
+    }
+}
+
+
 static void
 zip_command_common(zip_t *dev)
 {
     double bytes_per_second, period;
-    double dusec;
 
     dev->status = BUSY_STAT;
     dev->phase = 1;
     dev->pos = 0;
     if (dev->packet_status == PHASE_COMPLETE)
-	dev->callback = 0LL;
+	dev->callback = 0.0;
     else {
 	if (dev->drv->bus_type == ZIP_BUS_SCSI) {
-		dev->callback = -1LL;	/* Speed depends on SCSI controller */
+		dev->callback = -1.0;	/* Speed depends on SCSI controller */
 		return;
-	} else {
-		if (zip_current_mode(dev) == 2)
-			bytes_per_second = 66666666.666666666666666;	/* 66 MB/s MDMA-2 speed */
-		else
-			bytes_per_second =  8333333.333333333333333;	/* 8.3 MB/s PIO-2 speed */
-	}
+	} else
+		bytes_per_second = zip_bus_speed(dev);
 
 	period = 1000000.0 / bytes_per_second;
-	dusec = (double) TIMER_USEC;
-	dusec = dusec * period * (double) (dev->packet_len);
-	dev->callback = ((int64_t) dusec);
+	dev->callback = period * (double) (dev->packet_len);
     }
 
     zip_set_callback(dev);
@@ -888,6 +902,7 @@ zip_command_common(zip_t *dev)
 static void
 zip_command_complete(zip_t *dev)
 {
+    ui_sb_update_icon(SB_ZIP | dev->id, 0);
     dev->packet_status = PHASE_COMPLETE;
     zip_command_common(dev);
 }
@@ -998,8 +1013,9 @@ zip_cmd_error(zip_t *dev)
     dev->phase = 3;
     dev->pos = 0;
     dev->packet_status = PHASE_ERROR;
-    dev->callback = 50LL * ZIP_TIME;
+    dev->callback = 50.0 * ZIP_TIME;
     zip_set_callback(dev);
+    ui_sb_update_icon(SB_ZIP | dev->id, 0);
     zip_log("ZIP %i: [%02X] ERROR: %02X/%02X/%02X\n", dev->id, dev->current_cdb[0], zip_sense_key, zip_asc, zip_ascq);
 }
 
@@ -1015,8 +1031,9 @@ zip_unit_attention(zip_t *dev)
     dev->phase = 3;
     dev->pos = 0;
     dev->packet_status = PHASE_ERROR;
-    dev->callback = 50LL * ZIP_TIME;
+    dev->callback = 50.0 * ZIP_TIME;
     zip_set_callback(dev);
+    ui_sb_update_icon(SB_ZIP | dev->id, 0);
     zip_log("ZIP %i: UNIT ATTENTION\n", dev->id);
 }
 
@@ -1138,6 +1155,7 @@ static int
 zip_blocks(zip_t *dev, int32_t *len, int first_batch, int out)
 {
     *len = 0;
+    int i;
 
     if (!dev->sector_len) {
 	zip_command_complete(dev);
@@ -1154,11 +1172,17 @@ zip_blocks(zip_t *dev, int32_t *len, int first_batch, int out)
 
     *len = dev->requested_blocks << 9;
 
-    fseek(dev->drv->f, dev->drv->base + (dev->sector_pos << 9), SEEK_SET);
-    if (out)
-	fwrite(dev->buffer, 1, *len, dev->drv->f);
-    else
-	fread(dev->buffer, 1, *len, dev->drv->f);
+    for (i = 0; i < dev->requested_blocks; i++) {
+	fseek(dev->drv->f, dev->drv->base + (dev->sector_pos << 9) + (i << 9), SEEK_SET);
+
+	if (feof(dev->drv->f))
+		break;
+
+	if (out)
+		fwrite(dev->buffer + (i << 9), 1, 512, dev->drv->f);
+	else
+		fread(dev->buffer + (i << 9), 1, 512, dev->drv->f);
+    }
 
     zip_log("%s %i bytes of blocks...\n", out ? "Written" : "Read", *len);
 
@@ -1286,7 +1310,7 @@ zip_reset(scsi_common_t *sc)
 
     zip_rezero(dev);
     dev->status = 0;
-    dev->callback = 0LL;
+    dev->callback = 0.0;
     zip_set_callback(dev);
     dev->phase = 1;
     dev->request_length = 0xEB14;
@@ -1481,7 +1505,7 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 		if (!max_len) {
 			zip_set_phase(dev, SCSI_PHASE_STATUS);
 			dev->packet_status = PHASE_COMPLETE;
-			dev->callback = 20LL * ZIP_TIME;
+			dev->callback = 20.0 * ZIP_TIME;
 			zip_set_callback(dev);
 			break;
 		}
@@ -1533,7 +1557,7 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 			zip_set_phase(dev, SCSI_PHASE_STATUS);
 			/* zip_log("ZIP %i: All done - callback set\n", dev->id); */
 			dev->packet_status = PHASE_COMPLETE;
-			dev->callback = 20LL * ZIP_TIME;
+			dev->callback = 20.0 * ZIP_TIME;
 			zip_set_callback(dev);
 			break;
 		}
@@ -1550,7 +1574,7 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 		if (ret <= 0) {
 			zip_set_phase(dev, SCSI_PHASE_STATUS);
 			dev->packet_status = PHASE_COMPLETE;
-			dev->callback = 20LL * ZIP_TIME;
+			dev->callback = 20.0 * ZIP_TIME;
 			zip_set_callback(dev);
 			zip_buf_free(dev);
 			return;
@@ -1594,6 +1618,8 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 			case GPCMD_VERIFY_6:
 			case GPCMD_WRITE_6:
 				dev->sector_len = cdb[4];
+				if (dev->sector_len == 0)
+					dev->sector_len = 256;	/* For READ (6) and WRITE (6), a length of 0 indicates a transfer of 256 sector. */
 				dev->sector_pos = ((((uint32_t) cdb[1]) & 0x1f) << 16) | (((uint32_t) cdb[2]) << 8) | ((uint32_t) cdb[3]);
 				break;
 			case GPCMD_VERIFY_10:
@@ -1611,8 +1637,8 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 				break;
 		}
 
-		if ((dev->sector_pos >= dev->drv->medium_size) ||
-		    ((dev->sector_pos + dev->sector_len - 1) >= dev->drv->medium_size)) {
+		if ((dev->sector_pos >= dev->drv->medium_size)/* ||
+		    ((dev->sector_pos + dev->sector_len - 1) >= dev->drv->medium_size)*/) {
 			zip_lba_out_of_range(dev);
 			return;
 		}
@@ -1621,7 +1647,7 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 			zip_set_phase(dev, SCSI_PHASE_STATUS);
 			/* zip_log("ZIP %i: All done - callback set\n", dev->id); */
 			dev->packet_status = PHASE_COMPLETE;
-			dev->callback = 20LL * ZIP_TIME;
+			dev->callback = 20.0 * ZIP_TIME;
 			zip_set_callback(dev);
 			break;
 		}
@@ -1663,8 +1689,8 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 		dev->sector_len = (cdb[7] << 8) | cdb[8];
 		dev->sector_pos = (cdb[2] << 24) | (cdb[3] << 16) | (cdb[4] << 8) | cdb[5];
 
-		if ((dev->sector_pos >= dev->drv->medium_size) ||
-		    ((dev->sector_pos + dev->sector_len - 1) >= dev->drv->medium_size)) {
+		if ((dev->sector_pos >= dev->drv->medium_size)/* ||
+		    ((dev->sector_pos + dev->sector_len - 1) >= dev->drv->medium_size)*/) {
 			zip_lba_out_of_range(dev);
 			return;
 		}
@@ -1673,7 +1699,7 @@ zip_command(scsi_common_t *sc, uint8_t *cdb)
 			zip_set_phase(dev, SCSI_PHASE_STATUS);
 			/* zip_log("ZIP %i: All done - callback set\n", dev->id); */
 			dev->packet_status = PHASE_COMPLETE;
-			dev->callback = 20LL * ZIP_TIME;
+			dev->callback = 20.0 * ZIP_TIME;
 			zip_set_callback(dev);
 			break;
 		}
@@ -2307,7 +2333,7 @@ zip_drive_reset(int c)
 	sd->type = SCSI_REMOVABLE_DISK;
     } else if (zip_drives[c].bus_type == ZIP_BUS_ATAPI) {
 	/* ATAPI CD-ROM, attach to the IDE bus. */
-	id = ide_drives[zip_drives[c].ide_channel];
+	id = ide_get_drive(zip_drives[c].ide_channel);
 	/* If the IDE channel is initialized, we attach to it,
 	   otherwise, we do nothing - it's going to be a drive
 	   that's not attached to anything. */

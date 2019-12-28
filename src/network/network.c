@@ -12,11 +12,11 @@
  *		it should be malloc'ed and then linked to the NETCARD def.
  *		Will be done later.
  *
- * Version:	@(#)network.c	1.0.10	2018/11/18
+ * Version:	@(#)network.c	1.0.13	2019/12/02
  *
  * Author:	Fred N. van Kempen, <decwiz@yahoo.com>
  *
- *		Copyright 2017,2018 Fred N. van Kempen.
+ *		Copyright 2017-2019 Fred N. van Kempen.
  *
  *		Redistribution and  use  in source  and binary forms, with
  *		or  without modification, are permitted  provided that the
@@ -62,6 +62,7 @@
 #include "network.h"
 #include "net_3c503.h"
 #include "net_ne2000.h"
+#include "net_pcnet.h"
 #include "net_wd8003.h"
 
 
@@ -69,6 +70,8 @@ static netcard_t net_cards[] = {
     { "None",				"none",		NULL,
       NULL								},
     { "[ISA] 3Com EtherLink II (3C503)","3c503",	&threec503_device,
+      NULL								},
+    { "[ISA] AMD PCnet-ISA",		"pcnetisa",	&pcnet_isa_device,
       NULL								},
     { "[ISA] Novell NE1000",		"ne1k",		&ne1000_device,
       NULL								},
@@ -88,7 +91,11 @@ static netcard_t net_cards[] = {
       NULL								},
     { "[MCA] Western Digital WD8003E/A", "wd8003ea",	&wd8003ea_device,
       NULL								},
+    { "[PCI] AMD PCnet-PCI",		"pcnetpci",	&pcnet_pci_device,
+      NULL								},
     { "[PCI] Realtek RTL8029AS",	"ne2kpci",	&rtl8029as_device,
+      NULL								},
+    { "[VLB] AMD PCnet-VL",		"pcnetvlb",	&pcnet_vlb_device,
       NULL								},
     { "",				"",		NULL,
       NULL								}
@@ -99,6 +106,7 @@ static netcard_t net_cards[] = {
 int		network_type;
 int		network_ndev;
 int		network_card;
+static volatile int	net_wait = 0;
 char		network_host[522];
 netdev_t	network_devs[32];
 #ifdef ENABLE_NIC_LOG
@@ -219,6 +227,8 @@ network_attach(void *dev, uint8_t *mac, NETRXCB rx)
     net_cards[network_card].priv = dev;
     net_cards[network_card].rx = rx;
     network_mac = mac;
+
+    network_set_wait(0);
 
     /* Create the network events. */
     poll_data.wake_poll_thread = thread_create_event();
@@ -441,4 +451,25 @@ network_card_get_from_internal_name(char *s)
     }
 	
     return(-1);
+}
+
+
+void
+network_set_wait(int wait)
+{
+    network_wait(1);
+    net_wait = wait;
+    network_wait(0);
+}
+
+
+int
+network_get_wait(void)
+{
+    int ret;
+
+    network_wait(1);
+    ret = net_wait;
+    network_wait(0);
+    return ret;
 }

@@ -8,10 +8,13 @@
  *
  *		Definitions for the generic SCSI device command handler.
  *
- * Version:	@(#)scsi_device.h	1.0.16	2018/10/31
+ * Version:	@(#)scsi_device.h	1.0.17	2019/09/26
  *
  * Authors:	Miran Grca, <mgrca8@gmail.com>
  *		Fred N. van Kempen, <decwiz@yahoo.com>
+ *
+ *		Copyright 2016-2019 Miran Grca.
+ *		Copyright 2017-2019 Fred N. van Kempen.
  */
 #ifndef SCSI_DEVICE_H
 # define SCSI_DEVICE_H
@@ -22,9 +25,9 @@
 #define SCSI_LUN_MAX		8		/* always 8 */
 
 #ifdef WALTJE
-#define SCSI_TIME (50 * (1 << TIMER_SHIFT))
+#define SCSI_TIME	50.0
 #else
-#define SCSI_TIME (5 * 100 * (1 << TIMER_SHIFT))
+#define SCSI_TIME	500.0
 #endif
 
 
@@ -245,7 +248,7 @@
 #define CHECK_READY		2
 #define ALLOW_UA		1
 
-#define MSFtoLBA(m,s,f)  ((((m*60)+s)*75)+f)
+#define MSFtoLBA(m,s,f)  ((((m * 60) + s) * 75) + f)
 
 #define MSG_COMMAND_COMPLETE 0x00
 
@@ -289,23 +292,6 @@
 #define MODE_SELECT_PHASE_PAGE_HEADER	3
 #define MODE_SELECT_PHASE_PAGE		4
 
-
-/* This is probably no longer needed. */
-#if 0
-typedef struct
-{
-    uint8_t command[20];
-
-    int state, new_state,
-	clear_req, dev_id,
-	command_pos, data_pos,
-	change_state_delay,
-	new_req_delay;
-
-    uint32_t bus_in, bus_out;
-} scsi_bus_t;
-#endif
-
 typedef struct {
     uint8_t pages[0x40][0x40];
 } mode_sense_pages_t;
@@ -338,7 +324,7 @@ typedef struct scsi_common_s {
     uint32_t sector_pos, sector_len,
 	     packet_len, pos;
 
-    int64_t callback;
+    double callback;
 } scsi_common_t;
 
 typedef struct {	
@@ -373,7 +359,7 @@ extern int	mode_select_terminate(int force);
 extern int	mode_select_write(uint8_t val);
 
 extern uint8_t	*scsi_device_sense(scsi_device_t *dev);
-extern int64_t	scsi_device_get_callback(scsi_device_t *dev);
+extern double	scsi_device_get_callback(scsi_device_t *dev);
 extern void	scsi_device_request_sense(scsi_device_t *dev, uint8_t *buffer,
 					  uint8_t alloc_length);
 extern void	scsi_device_reset(scsi_device_t *dev);

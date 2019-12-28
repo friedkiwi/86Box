@@ -8,15 +8,15 @@
  *
  *		Implementation of the Generic ESC/P Dot-Matrix printer.
  *
- * Version:	@(#)prt_escp.c	1.0.6	2018/11/09
+ * Version:	@(#)prt_escp.c	1.0.7	2019/09/23
  *
  * Authors:	Michael Drüing, <michael@drueing.de>
  *		Fred N. van Kempen, <decwiz@yahoo.com>
  *
  *		Based on code by Frederic Weymann (originally for DosBox.)
  *
- *		Copyright 2018 Michael Drüing.
- *		Copyright 2018 Fred N. van Kempen.
+ *		Copyright 2018,2019 Michael Drüing.
+ *		Copyright 2019,2019 Fred N. van Kempen.
  *
  *		Redistribution and  use  in source  and binary forms, with
  *		or  without modification, are permitted  provided that the
@@ -62,6 +62,7 @@
 #include "../timer.h"
 #include "../mem.h"
 #include "../rom.h" 
+#include "../pit.h"
 #include "../plat.h"
 #include "../plat_dynld.h"
 #include "../ui.h"
@@ -199,7 +200,10 @@ typedef struct {
 typedef struct {
     const char	*name;
 
-    int64_t	timeout;
+    void	*lpt;
+
+    pc_timer_t	pulse_timer;
+    pc_timer_t	timeout_timer;
 
     wchar_t	page_fn[260];
     uint8_t 	color;
@@ -287,8 +291,6 @@ typedef struct {
 
     uint8_t	msb;			/* MSB mode, -1 = off */
     uint8_t	ctrl;
-    
-    uint8_t	char_read;
     
     PALETTE	palcol;
 } escp_t;
@@ -424,6 +426,20 @@ new_page(escp_t *dev, int8_t save, int8_t resetx)
 
 
 static void
+pulse_timer(void *priv)
+{
+    escp_t *dev = (escp_t *) priv;
+
+    if (dev->ack) {
+	dev->ack = 0;
+	lpt_irq(dev->lpt, 1);
+    }
+
+    timer_disable(&dev->pulse_timer);
+}
+
+
+static void
 timeout_timer(void *priv)
 {
     escp_t *dev = (escp_t *) priv;
@@ -431,7 +447,7 @@ timeout_timer(void *priv)
     if (dev->page->dirty)
 	new_page(dev, 1, 1);
 
-    dev->timeout = 0LL;
+    timer_disable(&dev->timeout_timer);
 }
 
 
@@ -516,8 +532,9 @@ reset_printer(escp_t *dev)
 static void
 reset_printer_hard(escp_t *dev)
 {
-    dev->char_read = 0;
-    dev->timeout = 0LL;
+    dev->ack = 0;
+    timer_disable(&dev->pulse_timer);
+    timer_disable(&dev->timeout_timer);
     reset_printer(dev);
 }
 
@@ -1587,8 +1604,6 @@ handle_char(escp_t *dev, uint8_t ch)
     uint16_t line_start, line_y;
     double x_advance;
 
-    dev->char_read = 1;
-
     if (dev->page == NULL)
 	return;
 
@@ -1751,18 +1766,6 @@ draw_hline(escp_t *dev, unsigned from_x, unsigned to_x, unsigned y, int8_t broke
 			*((uint8_t*)dev->page->pixels + x + (y + 1) * (unsigned)dev->page->pitch) = 240;
 	}
     }
-}
-
-
-static int8_t
-print_ack(escp_t *dev)
-{
-    if (dev->char_read) {
-	dev->char_read = 0;
-	return 1;
-    }
-
-    return 0;
 }
 
 
@@ -1976,8 +1979,9 @@ write_ctrl(uint8_t val, void *priv)
 
 	/* ACK it, will be read on next READ STATUS. */
 	dev->ack = 1;
+	timer_set_delay_u64(&dev->pulse_timer, ISACONST);
 
-	dev->timeout = 500000LL * TIMER_USEC;
+	timer_set_delay_u64(&dev->timeout_timer, 500000 * TIMER_USEC);
     }
 
     dev->ctrl = val;
@@ -2012,7 +2016,7 @@ read_status(void *priv)
 
     ret |= 0x80;
 
-    if (!print_ack(dev))
+    if (!dev->ack)
 	ret |= 0x40;
 
     return(ret);
@@ -2020,19 +2024,17 @@ read_status(void *priv)
 
 
 static void *
-escp_init(const lpt_device_t *INFO)
+escp_init(void *lpt)
 {
     const char *fn = PATH_FREETYPE_DLL;
     escp_t *dev;
     int i;
 
-    escp_log("ESC/P: LPT printer '%s' initializing\n", INFO->name);
-
     /* Dynamically load FreeType. */
     if (ft_handle == NULL) {
 	ft_handle = dynld_module(fn, ft_imports);
 	if (ft_handle == NULL) {
-		ui_msgbox(MBX_ERROR, (wchar_t *)IDS_2120);
+		ui_msgbox(MBX_ERROR, (wchar_t *)IDS_2119);
 		return(NULL);
 	}
     }
@@ -2040,7 +2042,7 @@ escp_init(const lpt_device_t *INFO)
     /* Initialize FreeType. */
     if (ft_lib == NULL) {
 	if (ft_Init_FreeType(&ft_lib)) {
-		ui_msgbox(MBX_ERROR, (wchar_t *)IDS_2120);
+		ui_msgbox(MBX_ERROR, (wchar_t *)IDS_2119);
 		dynld_close(ft_lib);
 		ft_lib = NULL;
 		return(NULL);
@@ -2050,8 +2052,8 @@ escp_init(const lpt_device_t *INFO)
     /* Initialize a device instance. */
     dev = (escp_t *)malloc(sizeof(escp_t));
     memset(dev, 0x00, sizeof(escp_t));
-    dev->name = INFO->name;
     dev->ctrl = 0x04;
+    dev->lpt = lpt;
 
     /* Create a full pathname for the font files. */
     wcscpy(dev->fontpath, exe_path);
@@ -2109,7 +2111,8 @@ escp_init(const lpt_device_t *INFO)
     escp_log("ESC/P: created a virtual page of dimensions %d x %d pixels.\n",
 	     dev->page->w, dev->page->h);
 
-    timer_add(timeout_timer, &dev->timeout, &dev->timeout, dev);
+    timer_add(&dev->pulse_timer, pulse_timer, dev, 0);
+    timer_add(&dev->timeout_timer, timeout_timer, dev, 0);
 
     return(dev);
 }

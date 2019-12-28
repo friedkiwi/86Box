@@ -54,7 +54,7 @@ guide:
 7. In order to test your fresh build, replace the `86Box.exe` in your current
    86Box enviroment with your freshly built one. If you do not have a
    pre-existing 86Box environment, download the latest successful build from
-   http://ci.86box.net, and the ROM set from https://tinyurl.com/rs20190213.
+   http://ci.86box.net, and the ROM set from https://tinyurl.com/rs20191022.
 8. Enjoy using and testing the emulator! :)
 
 If you encounter issues at any step or have additional questions, please join
@@ -65,18 +65,20 @@ Nightly builds
 For your convenience, we compile a number of 86Box builds per revision on our
 Jenkins instance.
 
-| Regular | Optimized | Experimental |
-|:-------:|:---------:|:------------:|
-|[![Build Status](http://ci.86box.net/job/86Box/badge/icon)](http://ci.86box.net/job/86Box)|[![Build Status](http://ci.86box.net/job/86Box-Optimized/badge/icon)](http://ci.86box.net/job/86Box-Optimized)|[![Build Status](http://ci.86box.net/job/86Box-Dev/badge/icon)](http://ci.86box.net/job/86Box-Dev)
+| Regular | Debug | Optimized | Experimental |
+|:-------:|:-----:|:---------:|:------------:|
+|[![Build Status](http://ci.86box.net/job/86Box/badge/icon)](http://ci.86box.net/job/86Box)|[![Build Status](http://ci.86box.net/job/86Box-Debug/badge/icon)](http://ci.86box.net/job/86Box-Debug)|[![Build Status](http://ci.86box.net/job/86Box-Optimized/badge/icon)](http://ci.86box.net/job/86Box-Optimized)|[![Build Status](http://ci.86box.net/job/86Box-Dev/badge/icon)](http://ci.86box.net/job/86Box-Dev)
 
 ### Legend
 * **Regular** builds are compiled using the settings in the building guide
   above. Use these if you don't know which build to use.
+* **Debug** builds are same as regular builds but include debug symbols.
+  If you don't need them, you don't need to use this build.
 * **Optimized** builds have the same feature set as regular builds, but are
   optimized for every modern Intel and AMD processor architecture, which might
   improve the emulator's performance in certain scenarios.
 * **Experimental (Dev)** builds are similar to regular builds but are compiled
-  certain unfinished features enabled. These builds are not optimized.
+  with certain unfinished features enabled. These builds are not optimized.
 
 Donations
 ---------

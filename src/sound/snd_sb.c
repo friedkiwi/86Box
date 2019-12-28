@@ -8,14 +8,14 @@
  *
  *		Sound Blaster emulation.
  *
- * Version:	@(#)sound_sb.c	1.0.15	2018/10/26
+ * Version:	@(#)sound_sb.c	1.0.16	2019/09/27
  *
  * Authors:	Sarah Walker, <http://pcem-emulator.co.uk/>
  *		Miran Grca, <mgrca8@gmail.com>
  *		TheCollector1995, <mariogplayer@gmail.com>
  *
- *		Copyright 2008-2017 Sarah Walker.
- *		Copyright 2016,2017 Miran Grca.
+ *		Copyright 2008-2019 Sarah Walker.
+ *		Copyright 2016-2019 Miran Grca.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -26,13 +26,13 @@
 #define HAVE_STDARG_H
 #include "../86box.h"
 #include "../io.h"
+#include "../timer.h"
 #include "../mca.h"
 #include "../mem.h"
 #include "../rom.h"
 #include "../device.h"
 #include "sound.h"
 #include "filters.h"
-#include "snd_dbopl.h"
 #include "snd_emu8k.h"
 #include "snd_mpu401.h"
 #include "snd_opl.h"
@@ -202,7 +202,7 @@ static void sb_get_buffer_sb2(int32_t *buffer, int len, void *p)
         {
                 int32_t out = 0;
 		if (sb->opl_enabled)
-                	out = ((sb->opl.buffer[c]     * 51000) >> 16);
+                	out = ((sb->opl.buffer[c]     * (sb->opl_emu ? 47000 : 51000)) >> 16);
                 //TODO: Recording: Mic and line In with AGC
                 out += (int32_t)(((sb_iir(0, (float)sb->dsp.buffer[c]) / 1.3) * 65536) / 3) >> 16;
         
@@ -230,7 +230,7 @@ static void sb_get_buffer_sb2_mixer(int32_t *buffer, int len, void *p)
                 int32_t out = 0;
                 
 		if (sb->opl_enabled)
-                	out = ((((sb->opl.buffer[c]     * mixer->fm) >> 16) * 51000) >> 15);
+                	out = ((((sb->opl.buffer[c]     * mixer->fm) >> 16) * (sb->opl_emu ? 47000 : 51000)) >> 15);
                 /* TODO: Recording : I assume it has direct mic and line in like sb2 */
                 /* It is unclear from the docs if it has a filter, but it probably does */
                 out += (int32_t)(((sb_iir(0, (float)sb->dsp.buffer[c])     / 1.3) * mixer->voice) / 3) >> 15;
@@ -518,8 +518,8 @@ void sb_ct1335_mixer_write(uint16_t addr, uint8_t val, void *p)
                 mixer->cd     = sb_att_4dbstep_3bits[(mixer->regs[0x08] >> 1)&0x7];
                 mixer->voice  = sb_att_7dbstep_2bits[(mixer->regs[0x0A] >> 1)&0x3];
 
-                sound_set_cd_volume(((uint32_t)mixer->master * (uint32_t)mixer->cd * 4) / 65535,
-                                    ((uint32_t)mixer->master * (uint32_t)mixer->cd * 4) / 65535);
+                sound_set_cd_volume(((uint32_t)mixer->master * (uint32_t)mixer->cd) / 65535,
+                                    ((uint32_t)mixer->master * (uint32_t)mixer->cd) / 65535);
         }
 }
 
@@ -582,7 +582,7 @@ void sb_ct1345_mixer_write(uint16_t addr, uint8_t val, void *p)
                         {
                                 /* Compatibility: chain registers 0x02 and 0x22 as well as 0x06 and 0x26 */
                                 case 0x02: case 0x06: case 0x08:
-                                mixer->regs[mixer->index+0x20]=((val&0xE) << 4)|(val&0xE) << 4;
+                                mixer->regs[mixer->index+0x20]=((val&0xE) << 4)|(val&0xE);
                                 break;
                                 
                                 case 0x22: case 0x26: case 0x28:
@@ -639,8 +639,8 @@ void sb_ct1345_mixer_write(uint16_t addr, uint8_t val, void *p)
                 }
                 
                 /* TODO: pcspeaker volume? Or is it not worth? */
-                sound_set_cd_volume(((uint32_t)mixer->master_l * (uint32_t)mixer->cd_l * 4) / 65535,
-                                    ((uint32_t)mixer->master_r * (uint32_t)mixer->cd_r * 4) / 65535);
+                sound_set_cd_volume(((uint32_t)mixer->master_l * (uint32_t)mixer->cd_l) / 65535,
+                                    ((uint32_t)mixer->master_r * (uint32_t)mixer->cd_r) / 65535);
         }
 }
 
@@ -805,8 +805,8 @@ void sb_ct1745_mixer_write(uint16_t addr, uint8_t val, void *p)
                 mixer->treble_r = mixer->regs[0x45] >> 4;
 
                 /*TODO: pcspeaker volume, with "output_selector" check? or better not? */
-                sound_set_cd_volume(((uint32_t)mixer->master_l * (uint32_t)mixer->cd_l * 4) / 65535,
-                                    ((uint32_t)mixer->master_r * (uint32_t)mixer->cd_r * 4) / 65535);
+                sound_set_cd_volume(((uint32_t)mixer->master_l * (uint32_t)mixer->cd_l) / 65535,
+                                    ((uint32_t)mixer->master_r * (uint32_t)mixer->cd_r) / 65535);
                 sb_log("sb_ct1745: Received register WRITE: %02X\t%02X\n", mixer->index, mixer->regs[mixer->index]);
         }
 }
@@ -963,6 +963,14 @@ void sb_mcv_write(int port, uint8_t val, void *p)
         }
 }
 
+uint8_t sb_mcv_feedb(void *p)
+{
+        sb_t *sb = (sb_t *)p;
+
+	return (sb->pos_regs[2] & 1);
+}
+
+
 static int sb_pro_mcv_irqs[4] = {7, 5, 3, 3};
 
 uint8_t sb_pro_mcv_read(int port, void *p)
@@ -1079,7 +1087,7 @@ void *sb_mcv_init()
         sb_dsp_setdma8(&sb->dsp, device_get_config_int("dma"));
         sound_add_handler(sb_get_buffer_sb2, sb);
         /* I/O handlers activated in sb_mcv_write */
-        mca_add(sb_mcv_read, sb_mcv_write, sb);
+        mca_add(sb_mcv_read, sb_mcv_write, sb_mcv_feedb, sb);
         sb->pos_regs[0] = 0x84;
         sb->pos_regs[1] = 0x50;
         return sb;
@@ -1215,7 +1223,7 @@ void *sb_pro_mcv_init()
         sound_add_handler(sb_get_buffer_sbpro, sb);
 
         /* I/O handlers activated in sb_pro_mcv_write */
-        mca_add(sb_pro_mcv_read, sb_pro_mcv_write, sb);
+        mca_add(sb_pro_mcv_read, sb_pro_mcv_write, sb_mcv_feedb, sb);
         sb->pos_regs[0] = 0x03;
         sb->pos_regs[1] = 0x51;
 

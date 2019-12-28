@@ -8,15 +8,15 @@
  *
  *		Platform support defintions for Win32.
  *
- * Version:	@(#)win.h	1.0.25	2019/02/11
+ * Version:	@(#)win.h	1.0.29	2019/12/05
  *
  * Authors:	Sarah Walker, <http://pcem-emulator.co.uk/>
  *		Miran Grca, <mgrca8@gmail.com>
  *		Fred N. van Kempen, <decwiz@yahoo.com>
  *
- *		Copyright 2008-2018 Sarah Walker.
- *		Copyright 2016-2018 Miran Grca.
- *		Copyright 2017,2018 Fred N. van Kempen.
+ *		Copyright 2008-2019 Sarah Walker.
+ *		Copyright 2016-2019 Miran Grca.
+ *		Copyright 2017-2019 Fred N. van Kempen.
  */
 #ifndef PLAT_WIN_H
 # define PLAT_WIN_H
@@ -43,9 +43,13 @@
 #define SB_MENU_NAME		L"StatusBarMenu"
 #define FS_CLASS_NAME		L"86BoxFullScreen"
 
-/* Application-specific window messages. */
-#define WM_RESETD3D		WM_USER
-#define WM_LEAVEFULLSCREEN	WM_USER+1
+/* Application-specific window messages.
+
+   A dialog sends 0x8895 with WPARAM = 1 followed by 0x8896 with WPARAM = 1 on open,
+   and 0x8895 with WPARAM = <previous pause status> followed by 0x8896 with WPARAM = 0.
+
+   All shutdowns will send an 0x8897. */
+#define WM_LEAVEFULLSCREEN	WM_USER
 #define WM_SAVESETTINGS		0x8888
 #define WM_SHOWSETTINGS		0x8889
 #define WM_PAUSE		0x8890
@@ -55,20 +59,22 @@
 #define WM_CTRLALTDEL		0x8894
 /* Pause/resume status: WPARAM = 1 for paused, 0 for resumed. */
 #define WM_SENDSTATUS		0x8895
-/* Settings status: WPARAM = 1 for open, 0 for closed. */
-#define WM_SENDSSTATUS		0x8896
+/* Dialog (Settings or message box) status: WPARAM = 1 for open, 0 for closed. */
+#define WM_SENDDLGSTATUS	0x8896
+/* The emulator has shut down. */
+#define WM_HAS_SHUTDOWN		0x8897
 
 #ifdef USE_VNC
-#ifdef USE_D2D
-#define RENDERERS_NUM		5
-#else
-#define RENDERERS_NUM		4
-#endif
-#else
 #ifdef USE_D2D
 #define RENDERERS_NUM		4
 #else
 #define RENDERERS_NUM		3
+#endif
+#else
+#ifdef USE_D2D
+#define RENDERERS_NUM		3
+#else
+#define RENDERERS_NUM		2
 #endif
 #endif
 
@@ -115,6 +121,9 @@ extern void     win_mouse_close(void);
 #ifndef USE_DINPUT
 extern void     win_mouse_handle(LPARAM lParam, int infocus);
 #endif
+
+extern void     win_notify_dlg_open(void);
+extern void     win_notify_dlg_closed(void);
 
 extern LPARAM	win_get_string(int id);
 

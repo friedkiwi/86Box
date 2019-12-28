@@ -8,13 +8,13 @@
  *
  *		ATi Mach64 graphics card emulation.
  *
- * Version:	@(#)vid_ati_mach64.c	1.0.26	2018/10/18
+ * Version:	@(#)vid_ati_mach64.c	1.0.27	2019/09/28
  *
  * Authors:	Sarah Walker, <http://pcem-emulator.co.uk/>
  *		Miran Grca, <mgrca8@gmail.com>
  *
- *		Copyright 2008-2018 Sarah Walker.
- *		Copyright 2016-2018 Miran Grca.
+ *		Copyright 2008-2019 Sarah Walker.
+ *		Copyright 2016-2019 Miran Grca.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -27,6 +27,7 @@
 #include "../device.h"
 #include "../io.h"
 #include "../mem.h"
+#include "../timer.h"
 #include "../pci.h"
 #include "../rom.h"
 #include "../plat.h"
@@ -470,7 +471,7 @@ void mach64_recalctimings(svga_t *svga)
                 svga->hdisp_time = svga->hdisp = ((mach64->crtc_h_total_disp >> 16) & 255) + 1;
                 svga->vsyncstart = (mach64->crtc_v_sync_strt_wid & 2047) + 1;
                 svga->rowoffset = (mach64->crtc_off_pitch >> 22);
-                svga->clock = cpuclock / clock_gen->output_clock;
+                svga->clock = (cpuclock * (double)(1ull << 32)) / clock_gen->output_clock;
                 svga->ma_latch = (mach64->crtc_off_pitch & 0x1fffff) * 2;
                 svga->linedbl = svga->rowcount = 0;
                 svga->split = 0xffffff;
@@ -2789,26 +2790,22 @@ void mach64_hwcursor_draw(svga_t *svga, int displine)
         uint8_t dat;
         uint32_t col0 = ramdac->pallook[0];
         uint32_t col1 = ramdac->pallook[1];
-	int y_add, x_add;
 
-	y_add = (enable_overscan && !suppress_overscan) ? (overscan_y >> 1) : 0;
-	x_add = (enable_overscan && !suppress_overscan) ? 8 : 0;
-        
         offset = svga->hwcursor_latch.xoff;
         for (x = 0; x < 64 - svga->hwcursor_latch.xoff; x += 4)
         {
                 dat = svga->vram[svga->hwcursor_latch.addr + (offset >> 2)];
-                if (!(dat & 2))          ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 32 + x_add]  = (dat & 1) ? col1 : col0;
-                else if ((dat & 3) == 3) ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 32 + x_add] ^= 0xFFFFFF;
+                if (!(dat & 2))          buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add]  = (dat & 1) ? col1 : col0;
+                else if ((dat & 3) == 3) buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add] ^= 0xFFFFFF;
                 dat >>= 2;
-                if (!(dat & 2))          ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 33 + x_add]  = (dat & 1) ? col1 : col0;
-                else if ((dat & 3) == 3) ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 33 + x_add] ^= 0xFFFFFF;
+                if (!(dat & 2))          buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add + 1]  = (dat & 1) ? col1 : col0;
+                else if ((dat & 3) == 3) buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add + 1] ^= 0xFFFFFF;
                 dat >>= 2;
-                if (!(dat & 2))          ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 34 + x_add]  = (dat & 1) ? col1 : col0;
-                else if ((dat & 3) == 3) ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 34 + x_add] ^= 0xFFFFFF;
+                if (!(dat & 2))          buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add + 2]  = (dat & 1) ? col1 : col0;
+                else if ((dat & 3) == 3) buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add + 2] ^= 0xFFFFFF;
                 dat >>= 2;
-                if (!(dat & 2))          ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 35 + x_add]  = (dat & 1) ? col1 : col0;
-                else if ((dat & 3) == 3) ((uint32_t *)buffer32->line[displine + y_add])[svga->hwcursor_latch.x + x + 35 + x_add] ^= 0xFFFFFF;
+                if (!(dat & 2))          buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add + 3]  = (dat & 1) ? col1 : col0;
+                else if ((dat & 3) == 3) buffer32->line[displine][svga->hwcursor_latch.x + x + svga->x_add + 3] ^= 0xFFFFFF;
                 dat >>= 2;
                 offset += 4;
         }
@@ -2967,7 +2964,7 @@ void mach64_overlay_draw(svga_t *svga, int displine)
         int graphics_key_fn = (mach64->overlay_key_cntl >> 4) & 5;
         int overlay_cmp_mix = (mach64->overlay_key_cntl >> 8) & 0xf;
 
-        p = &((uint32_t *)buffer32->line[displine])[32 + mach64->svga.overlay_latch.x];
+        p = &buffer32->line[displine][svga->x_add + mach64->svga.overlay_latch.x];
 
         if (mach64->scaler_update)
         {
@@ -3309,10 +3306,10 @@ static void *mach64_common_init(const device_t *info)
         if (info->flags & DEVICE_PCI)
                 mem_mapping_disable(&mach64->bios_rom.mapping);
 
-        mem_mapping_add(&mach64->linear_mapping,        0,       0,       svga_read_linear, svga_readw_linear, svga_readl_linear, svga_write_linear, svga_writew_linear, svga_writel_linear, NULL, 0, &mach64->svga);
-        mem_mapping_add(&mach64->mmio_linear_mapping,   0,       0,       mach64_ext_readb, mach64_ext_readw,  mach64_ext_readl,  mach64_ext_writeb, mach64_ext_writew,  mach64_ext_writel,  NULL, 0,  mach64);
-        mem_mapping_add(&mach64->mmio_linear_mapping_2, 0,       0,       mach64_ext_readb, mach64_ext_readw,  mach64_ext_readl,  mach64_ext_writeb, mach64_ext_writew,  mach64_ext_writel,  NULL, 0,  mach64);
-        mem_mapping_add(&mach64->mmio_mapping,          0xbc000, 0x04000, mach64_ext_readb, mach64_ext_readw,  mach64_ext_readl,  mach64_ext_writeb, mach64_ext_writew,  mach64_ext_writel,  NULL, 0,  mach64);
+        mem_mapping_add(&mach64->linear_mapping,        0,       0,       svga_read_linear, svga_readw_linear, svga_readl_linear, svga_write_linear, svga_writew_linear, svga_writel_linear, NULL, MEM_MAPPING_EXTERNAL, &mach64->svga);
+        mem_mapping_add(&mach64->mmio_linear_mapping,   0,       0,       mach64_ext_readb, mach64_ext_readw,  mach64_ext_readl,  mach64_ext_writeb, mach64_ext_writew,  mach64_ext_writel,  NULL, MEM_MAPPING_EXTERNAL,  mach64);
+        mem_mapping_add(&mach64->mmio_linear_mapping_2, 0,       0,       mach64_ext_readb, mach64_ext_readw,  mach64_ext_readl,  mach64_ext_writeb, mach64_ext_writew,  mach64_ext_writel,  NULL, MEM_MAPPING_EXTERNAL,  mach64);
+        mem_mapping_add(&mach64->mmio_mapping,          0xbc000, 0x04000, mach64_ext_readb, mach64_ext_readw,  mach64_ext_readl,  mach64_ext_writeb, mach64_ext_writew,  mach64_ext_writel,  NULL, MEM_MAPPING_EXTERNAL,  mach64);
         mem_mapping_disable(&mach64->mmio_mapping);
 
         mach64_io_set(mach64);
